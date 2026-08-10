@@ -2,7 +2,8 @@
 // import {daftarProduk} from "../../data/index";
 import { ProdukCard } from './index';
 import { useState, useEffect } from 'react';
-const KatalogBumdes = () => {
+import { ProdukBumdes } from '../../App';
+const KatalogBumdes = ({dataProduk} : {dataProduk: ProdukBumdes[]}) => {
   const [produk, setProduk] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
 

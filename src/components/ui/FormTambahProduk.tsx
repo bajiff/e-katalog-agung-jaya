@@ -1,23 +1,19 @@
 // src/components/ui/FormTambahProduk.tsx
 import { useState } from 'react';
-
-const FormTambahProduk = () => {
-  // 1. Buat 3 State untuk menyimpan input pengguna:
-  // - namaProduk (nilai awal: string kosong "")
-  // - hargaProduk (nilai awal: string kosong "") -> Biarkan string dulu agar mudah saat input form
-  // - kategori (nilai awal: string kosong "")
+import { ProdukBumdes } from '../../App';
+interface FormProps {
+  onTambahProduk: (produk: ProdukBumdes) => void;
+}
+const FormTambahProduk = ({onTambahProduk} :FormProps) => {
   const [namaProduk, setNamaProduk] = useState("");
   const [hargaProduk, setHargaProduk] = useState("");
   const [kategori, setKategori] = useState("");
 
-  // 2. Buat fungsi penanganan submit
-  // Perhatikan cara penulisan tipe data event (e) di TypeScript!
   const tanganiSubmit = (e: React.FormEvent<HTMLFormElement>) => {
-    // a. Cegat perilaku bawaan browser (reload)
     e.preventDefault();
-    // b. Cetak data ke console, misalnya: console.log({ namaProduk, hargaProduk, kategori })
     console.log({namaProduk, hargaProduk, kategori})
-    // c. (Opsional/Poin Plus) Kosongkan kembali form dengan men-set ketiga state jadi "" (string kosong)
+    const produkBaru = {id: Date.now().toString(), nama: namaProduk, harga: Number(hargaProduk), kategori: kategori}
+    onTambahProduk(produkBaru)
     setNamaProduk(""); 
     setHargaProduk("");
     setKategori("");
