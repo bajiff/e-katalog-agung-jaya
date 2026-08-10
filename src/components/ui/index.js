@@ -1,4 +1,5 @@
 import ProdukCard from "./ProdukCard";
 import KatalogBumdes from "./katalogBumdes";
+import FormTambahProduk from "./FormTambahProduk";
 
-export {KatalogBumdes, ProdukCard};
+export {KatalogBumdes, ProdukCard, FormTambahProduk};

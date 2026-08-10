@@ -1,11 +1,12 @@
-import {KatalogBumdes} from "./components/ui/index";
+import {FormTambahProduk} from "./components/ui/index";
 
 
 const App = () => {
   return (
     <div>
       <h1>Katalog Bumdes</h1>
-      <KatalogBumdes />
+      {/* <KatalogBumdes /> */}
+    <FormTambahProduk/>
     </div>
   )
 }
