@@ -2,10 +2,7 @@
 "use client"
 import { useState } from 'react';
 import { ProdukBumdes } from '@/app/page';
-interface FormProps {
-  onTambahProduk: (produk: ProdukBumdes) => void;
-}
-const FormTambahProduk = ({onTambahProduk} :FormProps) => {
+const FormTambahProduk = () => {
   const [namaProduk, setNamaProduk] = useState("");
   const [hargaProduk, setHargaProduk] = useState("");
   const [kategori, setKategori] = useState("");
@@ -14,7 +11,6 @@ const FormTambahProduk = ({onTambahProduk} :FormProps) => {
     e.preventDefault();
     console.log({namaProduk, hargaProduk, kategori})
     const produkBaru = {id: Date.now().toString(), nama: namaProduk, harga: Number(hargaProduk), kategori: kategori}
-    onTambahProduk(produkBaru)
     setNamaProduk(""); 
     setHargaProduk("");
     setKategori("");

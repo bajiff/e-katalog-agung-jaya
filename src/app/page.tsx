@@ -1,5 +1,4 @@
 // src/app/page.tsx
-import { useState } from "react";
 import {KatalogBumdes, FormTambahProduk} from "@/components/ui";
 
 export interface ProdukBumdes {
@@ -10,14 +9,25 @@ export interface ProdukBumdes {
 }
 
 const App = () => {
-  const [daftarProduk, setDaftarProduk] = useState<ProdukBumdes[]>([]);
-  const tambahProduk = (produkBaru : ProdukBumdes) => {
-    setDaftarProduk([...daftarProduk, produkBaru])
-  }
+  const daftarProduk:  ProdukBumdes[] = [
+    {
+      id: "1",
+      nama: "Baji",
+      harga: 10000,
+      kategori: "makanan"
+    },
+
+    {
+      id: "2",
+      nama: "Baji",
+      harga: 10000,
+      kategori: "makanan"
+    },
+  ];
 
   return (
     <main style={{ display: 'flex', gap: '2rem', padding: '2rem' }}>
-      <FormTambahProduk onTambahProduk={tambahProduk}/>
+      <FormTambahProduk />
       <KatalogBumdes dataProduk={daftarProduk} />
     </main>
   )
