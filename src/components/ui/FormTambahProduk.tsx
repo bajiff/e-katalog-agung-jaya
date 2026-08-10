@@ -1,7 +1,6 @@
 // src/components/ui/FormTambahProduk.tsx
 "use client"
 import { useState } from 'react';
-import { ProdukBumdes } from '@/app/page';
 const FormTambahProduk = () => {
   const [namaProduk, setNamaProduk] = useState("");
   const [hargaProduk, setHargaProduk] = useState("");
@@ -10,7 +9,6 @@ const FormTambahProduk = () => {
   const tanganiSubmit = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     console.log({namaProduk, hargaProduk, kategori})
-    const produkBaru = {id: Date.now().toString(), nama: namaProduk, harga: Number(hargaProduk), kategori: kategori}
     setNamaProduk(""); 
     setHargaProduk("");
     setKategori("");
