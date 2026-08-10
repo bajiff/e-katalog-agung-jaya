@@ -1,6 +1,6 @@
-// src/components/ui/index.js
+// src/components/ui/index.ts
 import ProdukCard from "./ProdukCard";
-import KatalogBumdes from "./katalogBumdes";
+import KatalogBumdes from "./KatalogBumdes";
 import FormTambahProduk from "./FormTambahProduk";
 
 export {KatalogBumdes, ProdukCard, FormTambahProduk};

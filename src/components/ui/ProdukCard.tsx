@@ -1,4 +1,5 @@
-// src/components/ui/ProdukCard.jsx
+// src/components/ui/ProdukCard.tsx
+"use client"
 import { useState } from 'react';
 
 interface ProdukCardProps {

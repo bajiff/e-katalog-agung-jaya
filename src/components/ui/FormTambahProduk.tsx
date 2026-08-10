@@ -1,6 +1,7 @@
 // src/components/ui/FormTambahProduk.tsx
+"use client"
 import { useState } from 'react';
-import { ProdukBumdes } from '../../App';
+import { ProdukBumdes } from '@/app/page';
 interface FormProps {
   onTambahProduk: (produk: ProdukBumdes) => void;
 }
