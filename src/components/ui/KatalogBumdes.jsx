@@ -1,19 +1,31 @@
 // src/components/ui/KatalogBumdes.jsx
-import {daftarProduk} from "../../data/index";
+// import {daftarProduk} from "../../data/index";
 import { ProdukCard } from './index';
-
+import { useState, useEffect } from 'react';
 const KatalogBumdes = () => {
-  // Return JSX (elemen div)
-  // Di dalamnya, gunakan daftarProduk.map((item) => ( ... ))
-  // Return komponen <ProdukCard /> dari dalam map
-  // Kirimkan prop 'key' menggunakan item.id
-  // Kirimkan prop 'nama' dan 'harga' dari data item
+  const [produk, setProduk] = useState([]);
+  const [isLoading, setIsLoading] = useState(true);
+
+  useEffect(() => {
+    const getData = async () => {
+      const fetchAPI = await fetch("https://fakestoreapi.com/products?limit=5")
+      const response = await fetchAPI.json()
+      setProduk(response);
+      setIsLoading(false);
+    }
+
+    getData()
+  }, []);
   return (
-    <section>
-    {daftarProduk.map(item => (
-      <ProdukCard key={item.id} nama={item.nama} harga={item.harga} />
-    ))}
-    </section>
+    <>
+    {isLoading ? (
+      <p>Sedang memuat data dari gudang...</p>
+    ) : (
+      produk.map(item => (
+        <ProdukCard key={item.id} harga={item.price} nama={item.title} />
+      ))
+    )}
+    </>
   )
 }
 
