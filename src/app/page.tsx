@@ -1,35 +1,23 @@
 // src/app/page.tsx
-import {KatalogBumdes, FormTambahProduk} from "@/components/ui";
 
-export interface ProdukBumdes {
-  id: string;
-  nama: string;
-  harga: number;
-  kategori: string;
-}
+import { PrismaClient } from "@/prisma/client";
 
-const App = () => {
-  const daftarProduk:  ProdukBumdes[] = [
-    {
-      id: "1",
-      nama: "Baji",
-      harga: 10000,
-      kategori: "makanan"
-    },
 
-    {
-      id: "2",
-      nama: "Baji",
-      harga: 10000,
-      kategori: "makanan"
-    },
-  ];
-
+const getData = async () => {
+  const prisma = new PrismaClient();
+  const produkBumdes = await prisma.produk.findMany();
+  
   return (
-    <main style={{ display: 'flex', gap: '2rem', padding: '2rem' }}>
-      <FormTambahProduk />
-      <KatalogBumdes dataProduk={daftarProduk} />
+    <main>
+      {produkBumdes.map(item => (
+        <section key={item.id}>
+          <h1>{item.nama}</h1>
+          <p>{item.harga}</p>
+          <p>{item.kategori}</p>
+        </section>
+      ))}
     </main>
   )
 }
-export default App;
+
+export default getData;
