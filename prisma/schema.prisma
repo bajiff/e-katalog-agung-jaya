@@ -13,7 +13,7 @@ datasource db {
 }
 
 model Produk {
-  id         Int      @id @default(autoincrement())
+  id          Int      @id @default(autoincrement())
   nama        String
   deskripsi   String
   harga       Float
