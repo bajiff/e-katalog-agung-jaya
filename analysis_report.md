@@ -1,7 +1,8 @@
 # Laporan Analisis SRS — Backend E-Katalog UMKM Desa Pasiragung
 
 > [!NOTE]
-> Analisis ini disusun berdasarkan **SRS v1.0**, **PRD v1.0**, dan **SDLC v1.0**. Fokus utama: menyiapkan peta kerja backend (`api-katalog-pasirasung`) agar Anda bisa langsung menyusun kode BE secara terstruktur.
+> **Versi 3.0** — Diperbarui: Prisma v7 + TypeScript + ESM.
+> Berdasarkan [dokumentasi resmi Prisma 7 upgrade guide](https://www.prisma.io/docs/orm/more/upgrade-guides/upgrading-versions/upgrading-to-prisma-7).
 
 ---
 
@@ -10,82 +11,180 @@
 ```mermaid
 graph LR
     FE["React FE (Vercel)"] -->|axios / HTTPS| BE["Express BE (Railway)"]
-    BE -->|Prisma ORM| DB[(PostgreSQL)]
-    BE -->|multer → sharp → WebP| FS["Image Storage"]
+    BE -->|"Prisma v7 + @prisma/adapter-pg"| DB[(PostgreSQL)]
+    BE -->|multer → sharp → WebP| CLD["Cloudinary"]
+    BE -->|Nodemailer / SMTP| EMAIL["Email Service"]
 ```
 
-| Komponen | Stack |
+| Komponen | Stack | Catatan |
+|---|---|---|
+| **Language** | **TypeScript** | ESM-first (`"type": "module"` di package.json) |
+| Runtime | Node.js + ExpressJS | — |
+| ORM | **Prisma v7** | Rust-free client (TS/WASM), wajib pakai **driver adapter** |
+| DB Adapter | **@prisma/adapter-pg** + **pg** | Connection pool via `pg.Pool`, bukan built-in Prisma engine |
+| Database | PostgreSQL | — |
+| Auth | JWT (stateless) + bcrypt | — |
+| Upload | multer → sharp (convert WebP) → **Cloudinary** | Memory storage (buffer), tidak menyentuh filesystem |
+| Validasi | zod | Rekomendasi SRS §9.2 |
+| Rate Limiting | express-rate-limit | — |
+| Email | **Nodemailer** (SMTP) | Kirim kode verifikasi email |
+| Deploy | Railway | — |
+
+### Nama Repo
+| Repo | Nama |
 |---|---|
-| Runtime | Node.js + ExpressJS |
-| ORM | Prisma |
-| Database | PostgreSQL |
-| Auth | JWT (stateless) + bcrypt |
-| Upload | multer → sharp (convert WebP) |
-| Validasi | zod / express-validator (rekomendasi SRS §9.2) |
-| Rate Limiting | express-rate-limit |
-| Deploy | Railway |
+| **Backend** | `api-katalog-pasiragung` |
+| **Frontend** | `e-katalog-pasiragung` |
 
 ---
 
-## 2. Peta Lengkap Endpoint (17 endpoint)
+## 2. Perubahan Penting — Prisma v7 vs v5/v6
 
-### 2.1 Auth Module — 5 endpoint
+> [!WARNING]
+> Prisma v7 memiliki **banyak breaking changes** dibanding v5/v6. Berikut daftar lengkap yang perlu diperhatikan:
 
-| # | Method | Endpoint | Akses | Request Body / Params | Response Sukses | Catatan Penting |
-|---|---|---|---|---|---|---|
-| 1 | `POST` | `/api/auth/register` | Publik | `{ name, email, password }` | `201` — `{ registration_token }` | Otomatis `role: admin`, `status: pending`. Generate `registration_token` unik & panjang |
-| 2 | `GET` | `/api/auth/status/:token` | Publik (token-bound) | Param: `token` (registration_token) | `200` — `{ status: "pending" / "approved" / "rejected" }` | Tidak boleh bocorkan data user lain |
-| 3 | `POST` | `/api/auth/status/:token/verify` | Publik (token-bound) | `{ verification_code }` | `200` — `{ message: "verified" }` | Validasi hash kode, cek expiry, cek attempts. **Tidak menghasilkan JWT** |
-| 4 | `POST` | `/api/auth/login` | Publik | `{ email, password }` | `200` — `{ token (JWT), user }` | Hanya berhasil jika `status: approved`. Return JWT |
-| 5 | `GET` | `/api/auth/me` | Authenticated | Header: `Authorization: Bearer <JWT>` | `200` — `{ user data }` | Data profil user yang sedang login |
-
-### 2.2 Admin Management Module — 5 endpoint (super_admin only)
-
-| # | Method | Endpoint | Akses | Request Body / Params | Response Sukses | Catatan Penting |
-|---|---|---|---|---|---|---|
-| 6 | `GET` | `/api/admin/requests` | super_admin | — | `200` — `[{ users with status: pending }]` | Daftar pending approval |
-| 7 | `PATCH` | `/api/admin/requests/:id/approve` | super_admin | Param: `id` (user id) | `200` — `{ message }` | Generate kode verifikasi → hash & simpan → kirim email kode asli. Status belum final `approved` sampai user verifikasi kode |
-| 8 | `PATCH` | `/api/admin/requests/:id/reject` | super_admin | Param: `id` (user id) | `200` — `{ message }` | Ubah status → `rejected` |
-| 9 | `GET` | `/api/admin/users` | super_admin | — | `200` — `[{ all admin users }]` | Daftar seluruh admin |
-| 10 | `DELETE` | `/api/admin/users/:id` | super_admin | Param: `id` (user id) | `200` — `{ message }` | Nonaktifkan / hapus akun admin |
-
-### 2.3 Categories Module — 4 endpoint
-
-| # | Method | Endpoint | Akses | Request Body / Params | Response Sukses | Catatan Penting |
-|---|---|---|---|---|---|---|
-| 11 | `GET` | `/api/categories` | Publik | — | `200` — `[{ id, name }]` | Dipakai FE publik (filter) & FE admin (dropdown) |
-| 12 | `POST` | `/api/categories` | admin, super_admin | `{ name }` | `201` — `{ category }` | Nama harus unik |
-| 13 | `PUT` | `/api/categories/:id` | admin, super_admin | `{ name }` | `200` — `{ category }` | — |
-| 14 | `DELETE` | `/api/categories/:id` | admin, super_admin | Param: `id` | `200` — `{ message }` | **Tolak dengan `409` jika kategori masih dipakai produk** |
-
-### 2.4 Products Module — 5 endpoint
-
-| # | Method | Endpoint | Akses | Request Body / Params | Response Sukses | Catatan Penting |
-|---|---|---|---|---|---|---|
-| 15 | `GET` | `/api/products` | Publik | Query: `?category=&stock_status=` | `200` — `[{ products }]` | Mendukung filter kategori & status stok |
-| 16 | `GET` | `/api/products/:id` | Publik | Param: `id` | `200` — `{ product detail }` | Seluruh field termasuk `flavor_variants` |
-| 17 | `POST` | `/api/products` | admin, super_admin | `multipart/form-data` | `201` — `{ product }` | Upload gambar wajib. `created_by` diisi dari JWT |
-| 18 | `PUT` | `/api/products/:id` | admin, super_admin | `multipart/form-data` | `200` — `{ product }` | Gambar opsional saat update |
-| 19 | `DELETE` | `/api/products/:id` | admin, super_admin | Param: `id` | `200` — `{ message }` | Hapus gambar fisik juga |
-
-> Total: **19 endpoint** (SRS ringkasan menuliskan 17, tapi setelah dihitung detail ada 19 — ini karena SRS lampiran §7 menggabungkan beberapa)
+| # | Perubahan | Prisma v5/v6 | Prisma v7 |
+|---|---|---|---|
+| 1 | **Provider** | `prisma-client-js` | `prisma-client` |
+| 2 | **Output** | Otomatis ke `node_modules` | **Wajib eksplisit** (mis. `../src/generated/prisma`) |
+| 3 | **Import path** | `from "@prisma/client"` | `from "./generated/prisma/client.js"` |
+| 4 | **Driver adapter** | Opsional / tidak perlu | **Wajib** (`@prisma/adapter-pg` untuk PostgreSQL) |
+| 5 | **DB URL config** | Di `schema.prisma` (`url = env(...)`) | Di **`prisma.config.ts`** (file baru di root) |
+| 6 | **Module system** | CommonJS | **ESM-first** (`"type": "module"`) |
+| 7 | **Client middleware** | `prisma.$use(...)` | **Dihapus** → gunakan Client Extensions |
+| 8 | **Seed** | `ts-node prisma/seed.ts` | **`tsx prisma/seed.ts`** (konfigurasi di `prisma.config.ts`) |
+| 9 | **`prisma generate`** | Otomatis saat `migrate dev` | **Harus dijalankan manual** setelah `migrate dev` |
+| 10 | **Env loading** | Otomatis dari `.env` | **Manual** — harus `import "dotenv/config"` |
+| 11 | **tsconfig** | Bebas | Wajib: `module: "ESNext"`, `moduleResolution: "bundler"` |
 
 ---
 
-## 3. Prisma Schema (Database Model)
+## 3. Konfigurasi Project — File-file Kunci
 
-Berikut blueprint Prisma schema yang diturunkan langsung dari SRS §3:
+### 3.1 `package.json`
+
+```json
+{
+  "name": "api-katalog-pasiragung",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "nodemon --exec tsx src/server.ts",
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "prisma:generate": "npx prisma generate",
+    "prisma:migrate": "npx prisma migrate dev",
+    "prisma:seed": "npx prisma db seed",
+    "prisma:studio": "npx prisma studio"
+  },
+  "dependencies": {
+    "@prisma/client": "^7.x",
+    "@prisma/adapter-pg": "^7.x",
+    "pg": "^8.x",
+    "express": "^5.x",
+    "@types/express": "^5.x",
+    "bcryptjs": "^3.x",
+    "@types/bcryptjs": "^3.x",
+    "jsonwebtoken": "^9.x",
+    "@types/jsonwebtoken": "^9.x",
+    "cors": "^2.x",
+    "@types/cors": "^2.x",
+    "multer": "^1.x",
+    "@types/multer": "^1.x",
+    "sharp": "^0.33.x",
+    "cloudinary": "^2.x",
+    "zod": "^3.x",
+    "express-rate-limit": "^7.x",
+    "nodemailer": "^6.x",
+    "@types/nodemailer": "^6.x",
+    "dotenv": "^16.x"
+  },
+  "devDependencies": {
+    "prisma": "^7.x",
+    "typescript": "^5.9.x",
+    "tsx": "^4.x",
+    "nodemon": "^3.x",
+    "@types/pg": "^8.x",
+    "@types/node": "^22.x"
+  }
+}
+```
+
+> [!IMPORTANT]
+> - `"type": "module"` — **wajib** untuk Prisma v7 (ESM-first)
+> - `tsx` menggantikan `ts-node` — lebih reliable untuk ESM
+> - `@types/*` packages untuk type safety di TypeScript
+
+### 3.2 `tsconfig.json`
+
+```json
+{
+  "compilerOptions": {
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "target": "ES2023",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "outDir": "./dist",
+    "rootDir": "./src",
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["./src/*"],
+      "@generated/*": ["./src/generated/*"]
+    }
+  },
+  "include": ["src/**/*", "prisma/**/*"],
+  "exclude": ["node_modules", "dist"]
+}
+```
+
+### 3.3 `prisma.config.ts` (FILE BARU — wajib di Prisma v7)
+
+```typescript
+import "dotenv/config";
+import { defineConfig, env } from "prisma/config";
+
+export default defineConfig({
+  // Lokasi schema utama
+  schema: "prisma/schema.prisma",
+
+  // Konfigurasi migrations & seed
+  migrations: {
+    path: "prisma/migrations",
+    seed: "tsx prisma/seed.ts",
+  },
+
+  // Database URL — dikelola di sini, BUKAN di schema.prisma
+  datasource: {
+    url: env("DATABASE_URL"),
+  },
+});
+```
+
+> [!CAUTION]
+> Di Prisma v7, `url = env("DATABASE_URL")` di `schema.prisma` **sudah deprecated**. Semua konfigurasi connection pindah ke `prisma.config.ts`. Jangan taruh URL di `schema.prisma`.
+
+---
+
+## 4. Prisma Schema — Updated untuk v7
 
 ```prisma
-// schema.prisma
+// prisma/schema.prisma
 
 generator client {
-  provider = "prisma-client-js"
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
 }
 
 datasource db {
   provider = "postgresql"
-  url      = env("DATABASE_URL")
+  // URL tidak di sini lagi — dikonfigurasi di prisma.config.ts
 }
 
 enum Role {
@@ -95,6 +194,7 @@ enum Role {
 
 enum AccountStatus {
   pending
+  awaiting_verification
   approved
   rejected
 }
@@ -113,7 +213,7 @@ model User {
   id                          String        @id @default(uuid())
   name                        String
   email                       String        @unique
-  password                    String        // hashed with bcrypt
+  password                    String
   role                        Role          @default(admin)
   status                      AccountStatus @default(pending)
   registrationToken           String        @unique @map("registration_token")
@@ -141,6 +241,7 @@ model Product {
   id                     String           @id @default(uuid())
   name                   String
   imageUrl               String           @map("image_url")
+  imagePublicId          String?          @map("image_public_id")
   stockStatus            StockStatus      @map("stock_status")
   categoryId             String           @map("category_id")
   whatsappNumber         String           @map("whatsapp_number")
@@ -149,7 +250,7 @@ model Product {
   productionSystem       ProductionSystem @map("production_system")
   netWeight              String           @map("net_weight")
   price                  Decimal          @db.Decimal(12, 2)
-  flavorVariants         Json             @map("flavor_variants") // array of {name, description}
+  flavorVariants         Json             @map("flavor_variants")
   composition            String           @db.Text
   nibNumber              String?          @map("nib_number")
   halalCertificateNumber String?          @map("halal_certificate_number")
@@ -164,226 +265,359 @@ model Product {
 }
 ```
 
----
-
-## 4. Aturan Validasi per Endpoint
-
-### 4.1 Register (`POST /api/auth/register`)
-
-| Field | Aturan |
-|---|---|
-| `name` | Wajib, string, tidak kosong |
-| `email` | Wajib, format email valid, **unik** di database |
-| `password` | Wajib, minimal 8 karakter, disarankan kombinasi huruf & angka |
-
-### 4.2 Verify Code (`POST /api/auth/status/:token/verify`)
-
-| Field | Aturan |
-|---|---|
-| `verification_code` | Wajib |
-| Validasi server-side | Hash input → compare constant-time vs `verification_code_hash` |
-| Cek expiry | `verification_code_expires_at` harus > `now()` |
-| Cek attempts | `verification_attempts` < batas (mis. 5x). Jika melebihi → lockout 15-30 menit atau wajib kirim ulang |
-
-### 4.3 Login (`POST /api/auth/login`)
-
-| Field | Aturan |
-|---|---|
-| `email` | Wajib, format valid |
-| `password` | Wajib |
-| Validasi server-side | User harus ada, password match (bcrypt compare), `status` harus `approved` |
-
-### 4.4 Create/Update Product
-
-| Field | Aturan | Wajib? |
-|---|---|---|
-| `name` | String, tidak kosong | ✅ |
-| `image` | File: jpg/jpeg/png, maks 5MB. Dikonversi ke WebP oleh server | ✅ (create), opsional (update) |
-| `stock_status` | Enum: `tersedia` \| `belum_tersedia` | ✅ |
-| `category_id` | Harus merujuk ke kategori yang ada | ✅ |
-| `whatsapp_number` | Regex: boleh diawali `+62` atau `08`, sisanya digit | ✅ |
-| `description` | String/text, tidak kosong | ✅ |
-| `owner_name` | String, tidak kosong | ✅ |
-| `production_system` | Enum: `pre_order` \| `ready_stock` | ✅ |
-| `net_weight` | String, tidak kosong (mis. "200 gram") | ✅ |
-| `price` | Angka positif (decimal) | ✅ |
-| `flavor_variants` | JSON array of `{name, description}`, minimal 1 varian | ✅ |
-| `composition` | String/text, tidak kosong | ✅ |
-| `nib_number` | Jika diisi: numerik, maks 13 digit | ❌ |
-| `halal_certificate_number` | Jika diisi: 2 huruf (kode negara) + 15 digit = total 17 karakter | ❌ |
-
-### 4.5 Create/Update Category
-
-| Field | Aturan | Wajib? |
-|---|---|---|
-| `name` | String, tidak kosong, **unik** | ✅ |
-
-### 4.6 Delete Category
-
-| Validasi | Aturan |
-|---|---|
-| Cek relasi | Jika masih ada produk yang merujuk ke kategori ini → **tolak dengan HTTP 409** |
+**Perbedaan dari v5/v6:**
+- `provider` berubah: `"prisma-client-js"` → `"prisma-client"`
+- `output` wajib: `"../src/generated/prisma"` (relatif dari `schema.prisma`)
+- `url` dihapus dari `datasource db` — pindah ke `prisma.config.ts`
 
 ---
 
-## 5. Middleware yang Dibutuhkan
+## 5. Prisma Client Instance — Cara Baru (v7)
 
-```mermaid
-graph TD
-    REQ[Incoming Request] --> RL[Rate Limiter]
-    RL --> CORS[CORS Middleware]
-    CORS --> ROUTE{Route Type?}
-    ROUTE -->|Public| HANDLER[Route Handler]
-    ROUTE -->|Authenticated| AUTH[JWT Auth Middleware]
-    AUTH --> RBAC{Role Check}
-    RBAC -->|admin / super_admin| HANDLER
-    RBAC -->|super_admin only| SA_CHECK[Super Admin Guard]
-    SA_CHECK --> HANDLER
+```typescript
+// src/config/prisma.ts
+
+import "dotenv/config";
+import { PrismaClient } from "../generated/prisma/client.js";
+import { PrismaPg } from "@prisma/adapter-pg";
+import pg from "pg";
+
+const { Pool } = pg;
+
+// Buat connection pool via driver pg (bukan Prisma engine)
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  // Atur connection pool sesuai kebutuhan
+  max: 10,                     // max connections
+  connectionTimeoutMillis: 5000, // timeout 5 detik (default pg: 0 / unlimited)
+  idleTimeoutMillis: 30000,    // idle timeout 30 detik
+});
+
+// Buat adapter
+const adapter = new PrismaPg(pool);
+
+// Instantiate PrismaClient dengan adapter (WAJIB di v7)
+export const prisma = new PrismaClient({ adapter });
 ```
 
-| Middleware | Deskripsi | Dipakai di |
-|---|---|---|
-| `authMiddleware` | Verifikasi JWT dari header `Authorization: Bearer <token>` | Semua endpoint admin & `GET /api/auth/me` |
-| `roleMiddleware('super_admin')` | Cek role dari JWT payload = `super_admin` | Semua endpoint `/api/admin/*` |
-| `roleMiddleware('admin', 'super_admin')` | Cek role admin atau super_admin | CRUD kategori (POST/PUT/DELETE) & CRUD produk (POST/PUT/DELETE) |
-| `rateLimiter` | Rate limiting (express-rate-limit) | `register`, `login`, `status/:token/verify` |
-| `uploadMiddleware` | multer config (file filter, size limit) | `POST /api/products`, `PUT /api/products/:id` |
-| `corsMiddleware` | Izinkan origin FE Vercel + localhost (dev) | Global |
-| `errorHandler` | Centralized error handler, response JSON konsisten | Global (app-level) |
+> [!WARNING]
+> **Connection pool**: Di Prisma v7, pool dikelola oleh driver `pg` langsung, bukan oleh Prisma engine. Default `pg` tidak punya connection timeout (0), sedangkan Prisma v6 default-nya 5 detik. **Selalu atur `connectionTimeoutMillis`** untuk menghindari hang.
 
 ---
 
-## 6. Struktur Folder Backend (Rekomendasi sesuai SRS §9)
+## 6. Peta Lengkap Endpoint (20 endpoint)
+
+### 6.1 Auth Module — 6 endpoint
+
+| # | Method | Endpoint | Akses | Request Body / Params | Response Sukses | Catatan |
+|---|---|---|---|---|---|---|
+| 1 | `POST` | `/api/auth/register` | Publik | `{ name, email, password }` | `201` — `{ registration_token }` | `role: admin`, `status: pending` |
+| 2 | `GET` | `/api/auth/status/:token` | Publik (token-bound) | Param: `token` | `200` — `{ status }` | Status: `pending` / `awaiting_verification` / `approved` / `rejected` |
+| 3 | `POST` | `/api/auth/status/:token/verify` | Publik (token-bound) | `{ verification_code }` | `200` — `{ message }` | Cek hash, expiry, attempts. **Tidak return JWT** |
+| 4 | `POST` | `/api/auth/status/:token/resend` | Publik (token-bound) | — | `200` — `{ message }` | Resend kode. Hanya jika `status: awaiting_verification` |
+| 5 | `POST` | `/api/auth/login` | Publik | `{ email, password }` | `200` — `{ token, user }` | Hanya jika `status: approved` |
+| 6 | `GET` | `/api/auth/me` | Authenticated | Header: `Bearer <JWT>` | `200` — `{ user }` | — |
+
+### 6.2 Admin Management Module — 5 endpoint
+
+| # | Method | Endpoint | Akses | Deskripsi |
+|---|---|---|---|---|
+| 7 | `GET` | `/api/admin/requests` | super_admin | Daftar user pending |
+| 8 | `PATCH` | `/api/admin/requests/:id/approve` | super_admin | Approve → `awaiting_verification` + kirim email kode |
+| 9 | `PATCH` | `/api/admin/requests/:id/reject` | super_admin | Reject user (dari `pending` atau `awaiting_verification`) |
+| 10 | `GET` | `/api/admin/users` | super_admin | Daftar semua admin |
+| 11 | `DELETE` | `/api/admin/users/:id` | super_admin | Hard delete (cek FK produk dulu) |
+
+### 6.3 Categories Module — 4 endpoint
+
+| # | Method | Endpoint | Akses | Deskripsi |
+|---|---|---|---|---|
+| 12 | `GET` | `/api/categories` | Publik | List kategori (pagination opsional) |
+| 13 | `POST` | `/api/categories` | admin, super_admin | Tambah kategori |
+| 14 | `PUT` | `/api/categories/:id` | admin, super_admin | Update kategori |
+| 15 | `DELETE` | `/api/categories/:id` | admin, super_admin | Hapus (409 jika masih dipakai) |
+
+### 6.4 Products Module — 5 endpoint
+
+| # | Method | Endpoint | Akses | Deskripsi |
+|---|---|---|---|---|
+| 16 | `GET` | `/api/products` | Publik | List + filter `?category=&stock_status=&search=&page=&limit=` |
+| 17 | `GET` | `/api/products/:id` | Publik | Detail produk |
+| 18 | `POST` | `/api/products` | admin, super_admin | Create (multipart, upload → Cloudinary) |
+| 19 | `PUT` | `/api/products/:id` | admin, super_admin | Update (gambar opsional) |
+| 20 | `DELETE` | `/api/products/:id` | admin, super_admin | Hard delete + hapus dari Cloudinary |
+
+### 6.5 Format Response Pagination
+
+```typescript
+interface PaginatedResponse<T> {
+  success: boolean;
+  data: T[];
+  pagination: {
+    page: number;
+    limit: number;
+    totalItems: number;
+    totalPages: number;
+    hasNextPage: boolean;
+    hasPrevPage: boolean;
+  };
+}
+```
+
+---
+
+## 7. Struktur Folder Backend (TypeScript + Prisma v7)
 
 ```
-api-katalog-pasirasung/
+api-katalog-pasiragung/
 ├── prisma/
-│   ├── schema.prisma
-│   ├── seed.js                  # Seed super_admin awal
+│   ├── schema.prisma             # Model/enum definitions (tanpa URL)
+│   ├── seed.ts                   # Seed super_admin (TypeScript)
 │   └── migrations/
+├── prisma.config.ts              # [BARU v7] Konfigurasi CLI (URL, seed, migrations)
+├── tsconfig.json                 # ESM config
+├── package.json                  # "type": "module"
 ├── src/
-│   ├── app.js                   # Express app setup
-│   ├── server.js                # Entry point
+│   ├── generated/
+│   │   └── prisma/               # [BARU v7] Output prisma generate (auto-generated, gitignored)
+│   │       └── client.js         # PrismaClient di sini
+│   ├── server.ts                 # Entry point
+│   ├── app.ts                    # Express app setup
 │   ├── config/
-│   │   ├── index.js             # barrel file
-│   │   ├── env.js               # Environment variables
-│   │   ├── cors.js              # CORS config
-│   │   └── prisma.js            # Prisma client instance
+│   │   ├── index.ts              # barrel file
+│   │   ├── env.ts                # Environment variables + validation (zod)
+│   │   ├── cors.ts               # CORS config
+│   │   ├── cloudinary.ts         # Cloudinary config
+│   │   └── prisma.ts             # PrismaClient + adapter-pg + Pool
 │   ├── middlewares/
-│   │   ├── index.js             # barrel file
-│   │   ├── auth.middleware.js   # JWT verification
-│   │   ├── role.middleware.js   # RBAC guard
-│   │   ├── upload.middleware.js # multer config
-│   │   ├── rateLimiter.middleware.js
-│   │   └── errorHandler.middleware.js
+│   │   ├── index.ts              # barrel file
+│   │   ├── auth.middleware.ts    # JWT verification
+│   │   ├── role.middleware.ts    # RBAC guard
+│   │   ├── upload.middleware.ts  # multer config (memory storage)
+│   │   ├── rateLimiter.middleware.ts
+│   │   └── errorHandler.middleware.ts
 │   ├── modules/
 │   │   ├── auth/
-│   │   │   ├── index.js         # barrel file
-│   │   │   ├── auth.routes.js
-│   │   │   ├── auth.controller.js
-│   │   │   ├── auth.service.js
-│   │   │   └── auth.validation.js
+│   │   │   ├── index.ts
+│   │   │   ├── auth.routes.ts
+│   │   │   ├── auth.controller.ts
+│   │   │   ├── auth.service.ts
+│   │   │   └── auth.validation.ts
 │   │   ├── admin/
-│   │   │   ├── index.js
-│   │   │   ├── admin.routes.js
-│   │   │   ├── admin.controller.js
-│   │   │   ├── admin.service.js
-│   │   │   └── admin.validation.js
+│   │   │   ├── index.ts
+│   │   │   ├── admin.routes.ts
+│   │   │   ├── admin.controller.ts
+│   │   │   ├── admin.service.ts
+│   │   │   └── admin.validation.ts
 │   │   ├── category/
-│   │   │   ├── index.js
-│   │   │   ├── category.routes.js
-│   │   │   ├── category.controller.js
-│   │   │   ├── category.service.js
-│   │   │   └── category.validation.js
+│   │   │   ├── index.ts
+│   │   │   ├── category.routes.ts
+│   │   │   ├── category.controller.ts
+│   │   │   ├── category.service.ts
+│   │   │   └── category.validation.ts
 │   │   └── product/
-│   │       ├── index.js
-│   │       ├── product.routes.js
-│   │       ├── product.controller.js
-│   │       ├── product.service.js
-│   │       └── product.validation.js
+│   │       ├── index.ts
+│   │       ├── product.routes.ts
+│   │       ├── product.controller.ts
+│   │       ├── product.service.ts
+│   │       └── product.validation.ts
 │   ├── shared/
-│   │   ├── index.js             # barrel file
-│   │   ├── baseCrud.service.js  # Generic CRUD (DRY — SRS §9.3)
-│   │   ├── imageProcessor.js   # sharp WebP conversion
-│   │   ├── hashUtils.js        # bcrypt, constant-time compare
-│   │   ├── tokenUtils.js       # JWT sign/verify, random token gen
-│   │   └── apiResponse.js      # Standard response format helper
+│   │   ├── index.ts              # barrel file
+│   │   ├── baseCrud.service.ts   # Generic CRUD (DRY)
+│   │   ├── cloudinary.util.ts   # Upload/delete Cloudinary
+│   │   ├── imageProcessor.ts    # sharp WebP conversion
+│   │   ├── emailService.ts      # Nodemailer wrapper
+│   │   ├── hashUtils.ts         # bcrypt, constant-time compare
+│   │   ├── tokenUtils.ts        # JWT sign/verify, random token gen
+│   │   ├── paginationUtils.ts   # Helper pagination
+│   │   └── apiResponse.ts       # Standard response format
 │   └── routes/
-│       └── index.js             # Mount all module routes
-├── uploads/                     # WebP images (gitignored)
-├── .env                         # DATABASE_URL, JWT_SECRET, etc.
+│       └── index.ts              # Mount all module routes
+├── .env
 ├── .env.example
-├── .gitignore
-├── package.json
+├── .gitignore                    # Include: src/generated/, dist/
 └── README.md
 ```
 
-> [!TIP]
-> Sesuai SRS §9.3 (DRY), `baseCrud.service.js` adalah generic CRUD service berbasis Prisma yang dipakai ulang oleh modul **Category** dan **Product** — cukup beda di skema validasi.
+> [!IMPORTANT]
+> **Folder `src/generated/prisma/`** — Ini di-generate otomatis oleh `npx prisma generate`. **Masukkan ke `.gitignore`** karena bisa di-generate ulang kapan saja. Jangan edit file di dalamnya.
 
 ---
 
-## 7. Alur Kritis yang Perlu Diperhatikan
+## 8. Seed Script — TypeScript (Prisma v7)
 
-### 7.1 Alur Registrasi → Approval → Verifikasi → Login
+```typescript
+// prisma/seed.ts
 
-Ini adalah alur paling kompleks di sistem. Berikut sequence lengkapnya:
+import "dotenv/config";
+import { PrismaClient } from "../src/generated/prisma/client.js";
+import { PrismaPg } from "@prisma/adapter-pg";
+import pg from "pg";
+import bcrypt from "bcryptjs";
+import crypto from "crypto";
 
-```mermaid
-sequenceDiagram
-    participant User as Calon Admin
-    participant FE as Frontend
-    participant BE as Backend
-    participant DB as Database
-    participant Email as Email Service
+const { Pool } = pg;
 
-    User->>FE: Isi form register
-    FE->>BE: POST /api/auth/register
-    BE->>DB: Create user (status: pending, generate registration_token)
-    BE-->>FE: 201 { registration_token }
-    FE->>FE: Redirect ke /status/:registration_token
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+});
+const adapter = new PrismaPg(pool);
+const prisma = new PrismaClient({ adapter });
 
-    Note over FE: User menunggu di halaman status pending
+async function main(): Promise<void> {
+  const existingSuperAdmin = await prisma.user.findFirst({
+    where: { role: "super_admin" },
+  });
 
-    FE->>BE: GET /api/auth/status/:token (polling / revisit)
-    BE-->>FE: { status: "pending" }
+  if (existingSuperAdmin) {
+    console.log("✅ Super admin already exists, skipping seed.");
+    return;
+  }
 
-    Note over BE: Super Admin approve di dashboard
+  const hashedPassword = await bcrypt.hash(
+    process.env.SUPER_ADMIN_PASSWORD || "SuperAdmin123!",
+    12
+  );
 
-    BE->>DB: Generate kode verifikasi → hash → simpan hash + expiry
-    BE->>Email: Kirim kode asli ke email user
-    
-    User->>FE: Buka halaman /status/:registration_token
-    FE->>BE: GET /api/auth/status/:token
-    BE-->>FE: { status: "pending", awaiting_verification: true }
-    
-    User->>FE: Input kode verifikasi
-    FE->>BE: POST /api/auth/status/:token/verify { code }
-    BE->>DB: Compare hash, cek expiry, cek attempts
-    BE->>DB: Update status → approved, nullkan kode
-    BE-->>FE: 200 { message: "verified, silakan login" }
+  const superAdmin = await prisma.user.create({
+    data: {
+      name: process.env.SUPER_ADMIN_NAME || "Super Admin",
+      email: process.env.SUPER_ADMIN_EMAIL || "admin@pasiragung.desa.id",
+      password: hashedPassword,
+      role: "super_admin",
+      status: "approved",
+      registrationToken: crypto.randomBytes(32).toString("hex"),
+    },
+  });
 
-    User->>FE: Login (email + password)
-    FE->>BE: POST /api/auth/login
-    BE-->>FE: 200 { token: JWT }
+  console.log(`✅ Super admin created: ${superAdmin.email}`);
+}
+
+main()
+  .catch((e) => {
+    console.error("❌ Seed failed:", e);
+    process.exit(1);
+  })
+  .finally(async () => {
+    await prisma.$disconnect();
+    await pool.end();
+  });
 ```
 
-### 7.2 Upload & Proses Gambar
-
-```mermaid
-graph LR
-    A[Client upload jpg/png ≤5MB] --> B[multer receive file]
-    B --> C{Validasi tipe & ukuran}
-    C -->|Invalid| D[Return 400 error]
-    C -->|Valid| E[sharp: resize max 800px width]
-    E --> F[sharp: convert to WebP]
-    F --> G[Save to /uploads/]
-    G --> H[Store path/URL in DB]
-```
+> Jalankan: `npx prisma db seed`
 
 ---
 
-## 8. Environment Variables yang Dibutuhkan
+## 9. Alur Setup Prisma v7 dari Nol (Step-by-Step)
+
+```mermaid
+graph TD
+    A["1. npm init -y"] --> B["2. Install dependencies"]
+    B --> C["3. Buat prisma.config.ts"]
+    C --> D["4. npx prisma init"]
+    D --> E["5. Edit schema.prisma<br/>(provider, output, models)"]
+    E --> F["6. Setup .env<br/>(DATABASE_URL)"]
+    F --> G["7. npx prisma migrate dev<br/>--name init"]
+    G --> H["8. npx prisma generate"]
+    H --> I["9. Buat src/config/prisma.ts<br/>(adapter + Pool)"]
+    I --> J["10. npx prisma db seed"]
+
+    style C fill:#ff9800,color:#000
+    style H fill:#ff9800,color:#000
+    style I fill:#ff9800,color:#000
+```
+
+### Langkah Detail:
+
+**Step 1–2: Inisialisasi project**
+```bash
+npm init -y
+npm install @prisma/client@7 @prisma/adapter-pg pg express bcryptjs jsonwebtoken cors multer sharp cloudinary zod express-rate-limit nodemailer dotenv
+npm install -D prisma@7 typescript tsx nodemon @types/node @types/express @types/bcryptjs @types/jsonwebtoken @types/cors @types/multer @types/nodemailer @types/pg
+```
+
+**Step 3: Buat `prisma.config.ts`** (lihat §3.3 di atas)
+
+**Step 4: Inisialisasi Prisma**
+```bash
+npx prisma init
+```
+
+**Step 5: Edit `schema.prisma`** — Ganti provider & output, hapus URL, tambah model (lihat §4)
+
+**Step 6: Setup `.env`**
+```env
+DATABASE_URL=postgresql://user:password@localhost:5432/ekatalog_pasiragung
+```
+
+**Step 7: Jalankan migration pertama**
+```bash
+npx prisma migrate dev --name init
+```
+
+**Step 8: Generate Prisma Client** ⚠️ DI V7 HARUS MANUAL
+```bash
+npx prisma generate
+```
+
+**Step 9: Buat Prisma client instance** (lihat §5 — `src/config/prisma.ts`)
+
+**Step 10: Seed super_admin**
+```bash
+npx prisma db seed
+```
+
+> [!CAUTION]
+> **Urutan penting!** Di Prisma v7, `migrate dev` dan `db push` **tidak lagi otomatis menjalankan `prisma generate`**. Anda harus selalu jalankan `npx prisma generate` secara manual setelah migration.
+
+---
+
+## 10. Diagram Alur Status User
+
+```mermaid
+stateDiagram-v2
+    [*] --> pending: POST /register
+    pending --> awaiting_verification: PATCH /approve (super_admin)
+    pending --> rejected: PATCH /reject (super_admin)
+    awaiting_verification --> approved: POST /verify (kode benar)
+    awaiting_verification --> awaiting_verification: POST /resend (kirim ulang kode)
+    awaiting_verification --> rejected: PATCH /reject (super_admin)
+    rejected --> [*]: DELETE /users/:id (hard delete)
+    approved --> [*]: DELETE /users/:id (hard delete)
+```
+
+### Aturan transisi yang HARUS ditaati:
+
+| Dari | Ke | Trigger |
+|---|---|---|
+| `pending` | `awaiting_verification` | Super admin approve |
+| `pending` | `rejected` | Super admin reject |
+| `awaiting_verification` | `approved` | User submit kode benar |
+| `awaiting_verification` | `awaiting_verification` | Resend kode |
+| `awaiting_verification` | `rejected` | Super admin reject |
+
+**Transisi yang TIDAK BOLEH terjadi:**
+- ❌ `approved` → `pending`
+- ❌ `rejected` → `approved`
+- ❌ `pending` → `approved` (harus lewat `awaiting_verification`)
+
+---
+
+## 11. Middleware
+
+| Middleware | Deskripsi | Dipakai di |
+|---|---|---|
+| `authMiddleware` | Verifikasi JWT | Semua endpoint admin & `/api/auth/me` |
+| `roleMiddleware("super_admin")` | Cek role super_admin | `/api/admin/*` |
+| `roleMiddleware("admin", "super_admin")` | Cek role admin/super_admin | CRUD kategori & produk (POST/PUT/DELETE) |
+| `rateLimiter` | Rate limiting | `register`, `login`, `verify`, `resend` |
+| `uploadMiddleware` | multer (memory storage) | `POST/PUT /api/products` |
+| `corsMiddleware` | CORS (FE origin) | Global |
+| `errorHandler` | Error handler JSON | Global |
+
+---
+
+## 12. Environment Variables
 
 ```env
 # Database
@@ -399,13 +633,19 @@ NODE_ENV=development
 
 # CORS
 FRONTEND_URL=http://localhost:3000
-# Production: https://e-katalog-pasiragung.vercel.app
 
-# Email (untuk kirim kode verifikasi)
+# Cloudinary
+CLOUDINARY_CLOUD_NAME=your-cloud-name
+CLOUDINARY_API_KEY=your-api-key
+CLOUDINARY_API_SECRET=your-api-secret
+
+# Email (Nodemailer SMTP)
 SMTP_HOST=smtp.example.com
 SMTP_PORT=587
+SMTP_SECURE=false
 SMTP_USER=email@example.com
 SMTP_PASS=your-email-password
+SMTP_FROM='"E-Katalog Pasiragung" <noreply@pasiragung.desa.id>'
 
 # Rate Limiting
 RATE_LIMIT_WINDOW_MS=900000
@@ -415,114 +655,200 @@ RATE_LIMIT_MAX=100
 VERIFICATION_CODE_LENGTH=8
 VERIFICATION_CODE_EXPIRY_MINUTES=15
 VERIFICATION_MAX_ATTEMPTS=5
+VERIFICATION_RESEND_MAX_PER_HOUR=3
+
+# Super Admin Seed
+SUPER_ADMIN_NAME=Super Admin
+SUPER_ADMIN_EMAIL=admin@pasiragung.desa.id
+SUPER_ADMIN_PASSWORD=SuperAdmin123!
 ```
 
 ---
 
-## 9. Temuan & Catatan dari Analisis
+## 13. Aturan Validasi per Endpoint
 
-### 9.1 Konsistensi yang Perlu Diperhatikan
+### Register
+| Field | Aturan |
+|---|---|
+| `name` | Wajib, string, tidak kosong |
+| `email` | Wajib, format email valid, unik |
+| `password` | Wajib, min 8 karakter |
 
-> [!WARNING]
-> **Typo di nama repo BE**: SRS menyebut `api-katalog-pasirasung` (huruf "g" hilang dari "pasiragung"). PRD juga menulis hal yang sama. Pastikan ini memang disengaja atau perbaiki sebelum membuat repo.
+### Verify Code
+| Validasi | Aturan |
+|---|---|
+| `verification_code` | Wajib. Hash → constant-time compare |
+| Cek expiry | `expires_at > now()` |
+| Cek attempts | `< 5`, lalu lockout |
+| Cek status | Harus `awaiting_verification` |
 
-> [!IMPORTANT]
-> **Jumlah endpoint**: SRS lampiran §7 merangkum seolah ada 17 endpoint, tapi dari spesifikasi detail §4.1–§4.4 sebenarnya ada **19 endpoint** (5 auth + 5 admin + 4 kategori + 5 produk). Angka 17 bisa menyesatkan — gunakan tabel detail di bagian 2 laporan ini sebagai acuan.
+### Resend Code
+| Validasi | Aturan |
+|---|---|
+| Cek status | Harus `awaiting_verification` |
+| Cooldown | Tidak bisa resend jika kode belum expired & attempts belum maks |
+| Rate limit | Maks 3 resend per jam per token |
 
-### 9.2 Hal yang Belum Eksplisit di SRS (Perlu Keputusan)
+### Login
+| Validasi | Aturan |
+|---|---|
+| `email` + `password` | Wajib. bcrypt compare. Status harus `approved` |
 
-| # | Pertanyaan | Rekomendasi |
+### Create/Update Product
+| Field | Wajib? | Aturan |
 |---|---|---|
-| 1 | **Status transisi saat approve**: Apakah status user tetap `pending` sampai verifikasi selesai, atau ada status antara (mis. `awaiting_verification`)? | SRS menyebut "approved-in-progress" di §4.2 tapi enum hanya punya `pending/approved/rejected`. **Rekomendasi: tambah status `awaiting_verification`** atau gunakan flag terpisah |
-| 2 | **Bagaimana super_admin pertama dibuat?** Tidak ada endpoint untuk membuat super_admin. | **Rekomendasi: Prisma seed script** — buat super_admin pertama via `prisma db seed` |
-| 3 | **Image storage**: Di mana file WebP disimpan? Lokal di server atau cloud storage? | SRS hanya menyebut "path/URL disimpan di database". Di Railway, **filesystem bersifat ephemeral** — file hilang saat redeploy. **Rekomendasi: gunakan cloud storage (Cloudinary / Supabase Storage / S3)** atau volume persist di Railway |
-| 4 | **Pagination**: Endpoint list produk & list kategori perlu pagination? | SRS tidak menyebutkan. **Rekomendasi: implementasikan pagination** (`?page=&limit=`) dari awal untuk produk, opsional untuk kategori |
-| 5 | **Search by nama produk**: SRS §4.5 menyebutnya "opsional/enhancement" | **Rekomendasi: tambahkan query `?search=`** di `GET /api/products` — implementasi sederhana dengan `ILIKE` di Prisma |
-| 6 | **Resend verification code**: Bagaimana jika kode expired / attempts habis? Siapa yang trigger resend? | SRS menyebut "kirim ulang kode oleh super_admin/user" tapi tidak ada endpoint khusus. **Rekomendasi: tambah endpoint `POST /api/auth/status/:token/resend` atau buat super_admin bisa re-approve** |
-| 7 | **Soft delete vs hard delete** untuk user & produk? | SRS tidak spesifik. **Rekomendasi: hard delete** untuk kesederhanaan (KISS §9.2), kecuali ada kebutuhan audit trail |
-| 8 | **Email service**: Library apa untuk kirim email? | **Rekomendasi: Nodemailer** — paling populer untuk Node.js, gratis, support SMTP |
+| `name` | ✅ | String, tidak kosong |
+| `image` | ✅ create / ❌ update | jpg/jpeg/png, maks 5MB → WebP → Cloudinary |
+| `stock_status` | ✅ | `tersedia` \| `belum_tersedia` |
+| `category_id` | ✅ | FK valid |
+| `whatsapp_number` | ✅ | Regex: `+62` atau `08` + digit |
+| `description` | ✅ | Text |
+| `owner_name` | ✅ | String |
+| `production_system` | ✅ | `pre_order` \| `ready_stock` |
+| `net_weight` | ✅ | String |
+| `price` | ✅ | Angka positif |
+| `flavor_variants` | ✅ | JSON array `[{name, description}]`, min 1 |
+| `composition` | ✅ | Text |
+| `nib_number` | ❌ | Numerik, maks 13 digit |
+| `halal_certificate_number` | ❌ | 2 huruf + 15 digit = 17 karakter |
 
-### 9.3 Potensi Risiko Teknis
-
-| Risiko | Dampak | Mitigasi |
-|---|---|---|
-| Railway ephemeral filesystem | File gambar hilang saat redeploy | Gunakan external storage (Cloudinary/Supabase) |
-| Belum ada status `awaiting_verification` | Logic approval jadi ambigu — user status `pending` tapi sudah di-approve | Tambah enum value atau flag boolean |
-| Rate limiting terlalu ketat di dev | Menghambat testing | Konfigurasi berbeda per environment |
-| Kode verifikasi lewat email | Butuh SMTP provider (Mailtrap untuk dev, Brevo/Resend untuk prod) | Setup SMTP dari Sprint 1 |
+### Delete Category
+| Validasi | Aturan |
+|---|---|
+| Cek relasi | Ada produk? → **409 Conflict** |
 
 ---
 
-## 10. Urutan Pengerjaan Backend (Sesuai SDLC Sprint Plan)
+## 14. Analisis Risiko & Mitigasi
 
-Berdasarkan SDLC §3.2, strategi **BE-first per modul**:
+### 14.1 Resend Verification Code
 
-### Sprint 1 — Fondasi + Auth + Verifikasi Email
+| Risiko | Mitigasi |
+|---|---|
+| Spam resend → inbox dibanjiri | Rate limit: maks 3 resend/jam/token. Cooldown jika kode belum expired |
+| Kode lama masih valid | Invalidate kode lama sebelum generate baru |
+| SMTP down saat resend | Transactional: kirim email → jika berhasil → simpan hash. Jika gagal → rollback |
+
+### 14.2 Hard Delete
+
+| Risiko | Mitigasi |
+|---|---|
+| Data hilang permanen | Modal konfirmasi di FE |
+| Gambar orphan di Cloudinary | Hapus dari Cloudinary berdasarkan `image_public_id` sebelum delete DB |
+| User punya produk (FK) | Tolak delete dengan **409** — "Reassign/hapus produknya dulu" |
+| Tidak ada audit trail | Acceptable untuk MVP (KISS). Bisa tambah `audit_logs` nanti |
+
+### 14.3 Nodemailer
+
+| Risiko | Mitigasi |
+|---|---|
+| SMTP credentials bocor | `.env` di `.gitignore`. Env vars di Railway |
+| Email masuk spam | Pakai SMTP provider bereputasi (Brevo/Resend). Set SPF/DKIM |
+| SMTP down | Retry 1-2x. Jika gagal → rollback status + return error |
+
+| Environment | SMTP Provider |
+|---|---|
+| Development | **Mailtrap** (sandbox, email tidak terkirim asli) |
+| Production | **Brevo** (300 email/hari gratis) atau **Resend** (100/hari gratis) |
+
+---
+
+## 15. Urutan Pengerjaan Backend
+
+### Sprint 1 — Fondasi + Auth + Verifikasi
 ```
-1. [ ] Setup project: npm init, install dependencies, folder structure
-2. [ ] Setup Prisma + PostgreSQL + schema + migration
-3. [ ] Seed super_admin pertama
-4. [ ] Middleware: CORS, error handler, rate limiter
-5. [ ] Auth module: register, login, me
-6. [ ] Auth module: status/:token, status/:token/verify
-7. [ ] Setup email service (Nodemailer)
-8. [ ] Test semua endpoint auth via Postman
+1. [ ] npm init, install deps, setup tsconfig.json, package.json (ESM)
+2. [ ] Buat prisma.config.ts
+3. [ ] Setup schema.prisma (provider: prisma-client, output, models)
+4. [ ] npx prisma migrate dev --name init
+5. [ ] npx prisma generate (MANUAL!)
+6. [ ] Buat src/config/prisma.ts (adapter-pg + Pool)
+7. [ ] Seed super_admin (npx prisma db seed)
+8. [ ] Config: CORS, Cloudinary, Nodemailer, env validation (zod)
+9. [ ] Middleware: error handler, rate limiter, auth, role
+10.[ ] Auth module: register, login, me, status, verify, resend
+11.[ ] Test semua via Postman
 ```
 
-### Sprint 2 — Admin Management + Kategori + Security
+### Sprint 2 — Admin Management + Kategori
 ```
-1. [ ] Admin module: GET requests, PATCH approve, PATCH reject
-2. [ ] Admin module: GET users, DELETE users/:id
-3. [ ] Category module: GET, POST, PUT, DELETE (+ validasi 409)
-4. [ ] Generic CRUD service (baseCrud.service.js)
-5. [ ] Test semua endpoint via Postman
+1. [ ] Admin module: requests, approve, reject, users, delete
+2. [ ] Category module: GET, POST, PUT, DELETE (+409)
+3. [ ] Generic CRUD service (baseCrud.service.ts)
+4. [ ] Test via Postman
 ```
 
-### Sprint 3 — Produk (CRUD + Upload Gambar)
+### Sprint 3 — Produk (CRUD + Cloudinary)
 ```
-1. [ ] Upload middleware (multer config)
+1. [ ] Upload middleware (multer memory)
 2. [ ] Image processor (sharp → WebP)
-3. [ ] Product module: GET list (+ filter), GET detail
-4. [ ] Product module: POST (create + upload), PUT (update), DELETE
-5. [ ] Test semua endpoint via Postman
+3. [ ] Cloudinary util (upload/delete)
+4. [ ] Product module: list (filter+search+pagination), detail, create, update, delete
+5. [ ] Test via Postman
 ```
 
 ### Sprint 4 — Polish & Deploy
 ```
-1. [ ] Endpoint publik final check
-2. [ ] Security hardening review (checklist SRS §5.1)
+1. [ ] Final security review (SRS §5.1 checklist)
+2. [ ] Switch SMTP ke production
 3. [ ] Deploy ke Railway
-4. [ ] Dokumentasi API (README / Postman collection)
+4. [ ] Dokumentasi API
 ```
 
 ---
 
-## 11. Dependencies (package.json) yang Direkomendasikan
+## 16. Dependencies Summary
 
 ```json
 {
   "dependencies": {
-    "express": "^4.x",
-    "@prisma/client": "^5.x",
-    "bcryptjs": "^2.x",
+    "@prisma/client": "^7.x",
+    "@prisma/adapter-pg": "^7.x",
+    "pg": "^8.x",
+    "express": "^5.x",
+    "bcryptjs": "^3.x",
     "jsonwebtoken": "^9.x",
     "cors": "^2.x",
     "multer": "^1.x",
     "sharp": "^0.33.x",
+    "cloudinary": "^2.x",
     "zod": "^3.x",
     "express-rate-limit": "^7.x",
     "nodemailer": "^6.x",
-    "dotenv": "^16.x",
-    "crypto": "(built-in)"
+    "dotenv": "^16.x"
   },
   "devDependencies": {
-    "prisma": "^5.x",
-    "nodemon": "^3.x"
+    "prisma": "^7.x",
+    "typescript": "^5.9.x",
+    "tsx": "^4.x",
+    "nodemon": "^3.x",
+    "@types/node": "^22.x",
+    "@types/express": "^5.x",
+    "@types/pg": "^8.x",
+    "@types/bcryptjs": "^3.x",
+    "@types/jsonwebtoken": "^9.x",
+    "@types/cors": "^2.x",
+    "@types/multer": "^1.x",
+    "@types/nodemailer": "^6.x"
   }
 }
 ```
 
 ---
 
-> [!IMPORTANT]
-> Pertanyaan di **bagian 9.2** (terutama #1 tentang status transisi, #3 tentang image storage, dan #6 tentang resend code) sebaiknya dijawab sebelum mulai coding, karena mempengaruhi struktur schema dan arsitektur.
+## 17. Semua Keputusan — RESOLVED
+
+| # | Keputusan | Status |
+|---|---|---|
+| 1 | Status `awaiting_verification` | ✅ RESOLVED |
+| 2 | Super admin via Prisma seed | ✅ RESOLVED |
+| 3 | Image storage → Cloudinary | ✅ RESOLVED |
+| 4 | Pagination (products wajib, categories opsional) | ✅ RESOLVED |
+| 5 | Search by nama (`?search=` + ILIKE) | ✅ RESOLVED |
+| 6 | Resend verification code endpoint | ✅ RESOLVED |
+| 7 | Hard delete + FK constraint check | ✅ RESOLVED |
+| 8 | Nodemailer (Mailtrap dev, Brevo prod) | ✅ RESOLVED |
+| 9 | **Prisma v7 + TypeScript + ESM** | ✅ RESOLVED |
+| 10 | **Driver adapter (@prisma/adapter-pg)** | ✅ RESOLVED |
+| 11 | **prisma.config.ts** | ✅ RESOLVED |
+| 12 | **Seed via tsx** | ✅ RESOLVED |
